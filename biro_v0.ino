@@ -10,10 +10,10 @@
  *****************************************/
 
 struct dc_motors_t {
-    uint8_t pwm_pin;
-    uint8_t direction_pin;
-    dc_motors_t(uint8_t pwm_pin, uint8_t direction_pin)
-        : pwm_pin(pwm_pin), direction_pin(direction_pin) {}
+  uint8_t pwm_pin;
+  uint8_t direction_pin;
+  dc_motors_t(uint8_t pwm_pin, uint8_t direction_pin)
+      : pwm_pin(pwm_pin), direction_pin(direction_pin) {}
 };
 
 struct distance_sensors_t {
