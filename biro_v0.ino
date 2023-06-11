@@ -167,8 +167,6 @@ bool TCR5000_is_on_line(line_sensors_t TCR5000_sensor);
 /**
  * @brief Gets command from bluetooth app
  * 
- * @param TCRT5000_sensor Struct containing line sensor information
- * 
  * @return The command from the app
  */
 char bluetooth_get_command();
