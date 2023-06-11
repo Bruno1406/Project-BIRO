@@ -399,16 +399,20 @@ void main_FSM() {
       if (command == 'U') {
           motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
           motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
-      } else if (command == 'D') {
+      } 
+      if (command == 'D') {
           motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
           motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
-      } else if (command == 'L') {
+      } 
+      if (command == 'L') {
           motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
           motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
-      } else if (command == 'R') {
+      } 
+      if (command == 'R') {
           motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
           motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
-      } else {
+      } 
+      if (command == '0') {
           motors_set_speed(motor_left, 0);
           motors_set_speed(motor_right, 0);
       }
