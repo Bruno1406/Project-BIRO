@@ -48,10 +48,10 @@ typedef enum {
 
 // DC MOTORS
 #define MOTOR_LEFT_PWM_PIN 9
-#define MOTOR_LEFT_DIRECTION_PIN 8
+#define MOTOR_LEFT_DIRECTION_PIN 10
  
-#define MOTOR_RIGHT_PWM_PIN 10
-#define MOTOR_RIGHT_DIRECTION_PIN 7
+#define MOTOR_RIGHT_PWM_PIN 7
+#define MOTOR_RIGHT_DIRECTION_PIN 8
 
 #define MAX_SPEED 100
 #define MIN_SPEED -100
@@ -71,16 +71,16 @@ typedef enum {
 #define DS_LEFT_ECHO_PIN 2
 #define DS_LEFT_TRIGGER_PIN 3
 
-#define DS_RIGHT_ECHO_PIN 0
-#define DS_RIGHT_TRIGGER_PIN 1
+#define DS_RIGHT_ECHO_PIN 4
+#define DS_RIGHT_TRIGGER_PIN 5
 
 #define DISTANCE_SENSORS_THRESHOLD 30
 
 // LINE SENSORS
-#define LS_FAR_LEFT_READ_PIN A0
-#define LS_CENTER_LEFT_READ_PIN A1
-#define LS_CENTER_RIGHT_READ_PIN A2
-#define LS_FAR_RIGHT_READ_PIN A3
+#define LS_FAR_LEFT_READ_PIN A5
+#define LS_CENTER_LEFT_READ_PIN A4
+#define LS_CENTER_RIGHT_READ_PIN A3
+#define LS_FAR_RIGHT_READ_PIN A2
 
 #define NUM_OF_LS 4
 #define LINE_SENSORS_THRESHOLD 200
@@ -95,11 +95,22 @@ typedef enum {
 #define KI 0
 
 // TIME CONSTANTS MS
+#define AUTONOMOUS_MODE_TIME 60000
 #define GRAB_OBJECT_ROUTINE_START 10000
 #define GRAB_OBJECT_ROUTINE_END 120000
 #define CROSS_H_DECELERATION 50
 #define CROSS_H_TURNING CROSS_H_DECELERATION + 300
 #define CROSS_H_STRAIGHT_LINE CROSS_H_TURNING + CROSS_H_DECELERATION + 2000
+
+// TESTS
+#define MAIN 0
+#define TEST_LS 1
+#define TEST_DS 2
+#define TEST_MOTORS 3
+#define TEST_SERVO 4
+
+#define TEST TEST_MOTORS
+
 
 
 /*****************************************
@@ -125,6 +136,7 @@ static Servo barrier_servo;
 static SoftwareSerial bt(RX,TX);
 
 static char command;
+static bool force_rc_mode = false;
 
 /*****************************************
  * Functions Prototypes
@@ -154,6 +166,13 @@ void servo_set_angle(Servo servo, uint8_t angle);
  * @return The distance reading obtained from the sensor
  */
 uint16_t hcsr04_get_distance(distance_sensors_t hcTCR5000sr04_sensor);
+
+/**
+ * @brief Gets if at least one distance sensor is seeing the wall
+ * 
+ * @return Whether or not one of the sensors is not seeing the wall
+ */
+bool hcsr04_is_not_seeing_wall();
 
 /**
  * @brief Gets reading from TCRT5000 IR sensor
@@ -215,7 +234,51 @@ void setup() {
 }
 
 void loop() {
+#if TEST == MAIN
+  Serial.println("A");
   main_FSM();   
+
+#elif TEST == TEST_LS
+  for (uint8_t i = 0; i < NUM_OF_LS; i++) {
+    Serial.print("Line Sensor ");
+    Serial.print(i);
+    Serial.println(":");
+    Serial.print(analogRead(ls_array[i].reading_adc_pin));
+    Serial.print(" : ");
+    Serial.println(TCR5000_is_on_line(ls_array[i]));
+  }
+  delay(1000);
+
+#elif TEST == TEST_DS
+  Serial.print("Distance Sensor Left: ");
+  Serial.println(hcsr04_get_distance(ds_left));
+  Serial.print("Distance Sensor Right: ");
+  Serial.println(hcsr04_get_distance(ds_right));
+  Serial.print("Is seeing wall: ");
+  Serial.println(hcsr04_is_not_seeing_wall());
+  delay(1000);
+
+#elif TEST == TEST_MOTORS
+  motors_set_speed(motor_left, MAX_SPEED);
+  motors_set_speed(motor_right, MAX_SPEED);
+  delay(3000);
+  motors_set_speed(motor_left, MIN_SPEED);
+  motors_set_speed(motor_right, MIN_SPEED);
+  delay(3000);
+  motors_set_speed(motor_left, MAX_SPEED);
+  motors_set_speed(motor_right, MIN_SPEED);
+  delay(3000);
+  motors_set_speed(motor_left, MIN_SPEED);
+  motors_set_speed(motor_right, MAX_SPEED);
+  delay(3000);
+
+#elif TEST == TEST_SERVO
+  servo_set_angle(barrier_servo, BARRIER_DOWN_ANGLE);
+  delay(3000);
+  servo_set_angle(barrier_servo, BARRIER_UP_ANGLE);
+  delay(3000);
+
+#endif 
 }
 
 /*****************************************
@@ -281,6 +344,9 @@ void autonomous_mode_FSM() {
   static autonomous_state_t state = WAIT_FOR_START;
   static uint32_t start_time = 0;
   uint32_t time = millis() - start_time;
+  if (start_time != 0 && time > AUTONOMOUS_MODE_TIME) {
+    force_rc_mode = true;
+  }
   switch (state) {
     case WAIT_FOR_START: {
       if (command == 'S') {
@@ -422,7 +488,7 @@ void main_FSM() {
       break;
     }
     case AUTONOMOUS: {
-      if (command != 'X') {
+      if (command != 'X' && !force_rc_mode) {
         autonomous_mode_FSM();
         state = AUTONOMOUS;
       }
