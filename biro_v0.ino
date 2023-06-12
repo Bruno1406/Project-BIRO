@@ -32,6 +32,7 @@ struct line_sensors_t {
 typedef enum {
   WAIT_FOR_START,
   FOLLOW_LINE,
+  FIRST_TURN,
   GRAB_OBJECTS,
   CROSS_H
 } autonomous_state_t;
@@ -60,6 +61,8 @@ typedef enum {
 #define FOLLOW_LINE_SPEED 30
 #define CROSS_H_TURNING_SPEED 70
 #define CROSS_H_STRAIGHT_SPEED 50
+#define FIRST_TURN_TURNING_SPEED 70
+#define FIRST_TURN_STRAIGHT_SPEED 50
 
 // SERVO MOTOR
 #define SERVO_PIN 6
@@ -98,9 +101,13 @@ typedef enum {
 #define AUTONOMOUS_MODE_TIME 60000
 #define GRAB_OBJECT_ROUTINE_START 10000
 #define GRAB_OBJECT_ROUTINE_END 120000
-#define CROSS_H_DECELERATION 50
+#define CROSS_H_DECELERATION 100
 #define CROSS_H_TURNING CROSS_H_DECELERATION + 300
 #define CROSS_H_STRAIGHT_LINE CROSS_H_TURNING + CROSS_H_DECELERATION + 2000
+#define FIRST_TURN_DECELERATION 100
+#define FIRST_TURN_STRAIGHT_LINE 200
+#define FIRST_TURN_TURNING FIRST_TURN_STRAIGHT_LINE + FIRST_TURN_DECELERATION + 1000
+
 
 // TESTS
 #define MAIN 0
@@ -343,6 +350,7 @@ int16_t pid_algorithm(float error) {
 void autonomous_mode_FSM() {
   static autonomous_state_t state = WAIT_FOR_START;
   static uint32_t start_time = 0;
+  static bool objects_grabbed = false;
   uint32_t time = millis() - start_time;
   if (start_time != 0 && time > AUTONOMOUS_MODE_TIME) {
     force_rc_mode = true;
@@ -372,7 +380,9 @@ void autonomous_mode_FSM() {
       int16_t response = pid_algorithm(error);
       motors_set_speed(motor_left, FOLLOW_LINE_SPEED + response);
       motors_set_speed(motor_right, FOLLOW_LINE_SPEED - response);
-      if (hcsr04_is_not_seeing_wall()) {
+      if (hcsr04_is_not_seeing_wall() && !objects_grabbed) {
+        state = FIRST_TURN;
+      } else if (hcsr04_is_not_seeing_wall()) {
         state = CROSS_H;
       } else if (time - start_time > GRAB_OBJECT_ROUTINE_START && time - start_time < GRAB_OBJECT_ROUTINE_END) {
         state = GRAB_OBJECTS;
@@ -384,6 +394,25 @@ void autonomous_mode_FSM() {
         state = FOLLOW_LINE;
       }
       break;
+    }
+    case FIRST_TURN: {
+      static uint32_t first_turn_start_time = millis();
+      static int8_t direction = hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD ? -1 : 1;
+      if (time - first_turn_start_time < FIRST_TURN_STRAIGHT_LINE) {
+        motors_set_speed(motor_left, FIRST_TURN_STRAIGHT_SPEED);
+        motors_set_speed(motor_right, FIRST_TURN_STRAIGHT_SPEED);
+      } else if (time - first_turn_start_time <= FIRST_TURN_STRAIGHT_LINE + FIRST_TURN_DECELERATION) {
+        motors_set_speed(motor_left, 0);
+        motors_set_speed(motor_right, 0);
+      } else if (time - first_turn_start_time < FIRST_TURN_TURNING) {
+        motors_set_speed(motor_left, FIRST_TURN_TURNING_SPEED * direction);
+        motors_set_speed(motor_right, -FIRST_TURN_TURNING_SPEED * direction);
+      }
+      if (time - first_turn_start_time >= FIRST_TURN_TURNING) {
+        state = FOLLOW_LINE;
+      } else {
+        state = FIRST_TURN;
+      }
     }
     case CROSS_H: {
       static uint32_t cross_h_start_time = millis();
@@ -421,6 +450,7 @@ void autonomous_mode_FSM() {
       servo_set_angle(barrier_servo, BARRIER_DOWN_ANGLE);
       // TODO: GRAB MANEUVER
       if (time - start_time > GRAB_OBJECT_ROUTINE_END) {
+        objects_grabbed = true;
         state = FOLLOW_LINE;
       } else {
         state = GRAB_OBJECTS;
