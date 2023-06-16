@@ -316,8 +316,8 @@ uint16_t hcsr04_get_distance(distance_sensors_t hcsr04_sensor) {
 
 bool hcsr04_is_not_seeing_wall() {
   static uint8_t num_of_readings = 0;
-  num_of_readings = (hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD || hcsr04_get_distance(ds_right) > DISTANCE_SENSORS_THRESHOLD) ?
-                    num_of_readings++ : 0;
+  num_of_readings += (hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD || 
+                      hcsr04_get_distance(ds_right) > DISTANCE_SENSORS_THRESHOLD) ? 1 : -num_of_readings;
   return num_of_readings > 5; 
 }
 
