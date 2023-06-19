@@ -58,6 +58,7 @@ typedef enum {
 #define MIN_SPEED -100
 
 #define RC_FULL_SPEED 80
+#define RC_TURNING_SPEED 80
 #define FOLLOW_LINE_SPEED 30
 #define CROSS_H_TURNING_SPEED 70
 #define CROSS_H_STRAIGHT_SPEED 50
@@ -107,7 +108,8 @@ typedef enum {
 #define FIRST_TURN_DECELERATION 100
 #define FIRST_TURN_STRAIGHT_LINE 200
 #define FIRST_TURN_TURNING FIRST_TURN_STRAIGHT_LINE + FIRST_TURN_DECELERATION + 1000
-
+#define DEBOUNCE_TIME 100
+#define SAFETY_TIME 1500
 
 // TESTS
 #define MAIN 0
@@ -115,8 +117,9 @@ typedef enum {
 #define TEST_DS 2
 #define TEST_MOTORS 3
 #define TEST_SERVO 4
+#define TEST_BLUETOOTH 5
 
-#define TEST TEST_MOTORS
+#define TEST TEST_DS
 
 
 
@@ -285,6 +288,11 @@ void loop() {
   servo_set_angle(barrier_servo, BARRIER_UP_ANGLE);
   delay(3000);
 
+#elif TEST == TEST_BLUETOOTH
+  char command = bluetooth_get_command();
+  if (command != '0') {
+    Serial.println(command);
+  }
 #endif 
 }
 
@@ -326,14 +334,29 @@ bool TCR5000_is_on_line(line_sensors_t TCR5000_sensor) {
 }
 
 char bluetooth_get_command() {
-  char command = '0';
+  static uint32_t debounce_timer = 0; 
+  static bool reset_timer = true;
+  static char current_command = '0';
+  char new_command = '0';
   if (bt.available()) {
     command = bt.read();
   }
   if (Serial.available()) {
       bt.write(Serial.read());
   }
-  return command;
+  uint8_t debounce_max_time = new_command == 'C' || new_command == 'A' ? SAFETY_TIME : DEBOUNCE_TIME;
+  if (new_command == current_command) {
+    reset_timer = true;
+  } else {
+    if (reset_timer) {
+      debounce_timer = millis();
+      reset_timer = false;
+    }
+    if (millis() - debounce_timer > debounce_max_time) {
+      current_command = new_command;
+    }
+  } 
+  return current_command;
 }
 
 int16_t pid_algorithm(float error) {
@@ -357,7 +380,7 @@ void autonomous_mode_FSM() {
   }
   switch (state) {
     case WAIT_FOR_START: {
-      if (command == 'S') {
+      if (command == 'A') {
         state = FOLLOW_LINE;
         start_time = millis();
       } else {
@@ -469,10 +492,10 @@ void main_FSM() {
       motors_set_speed(motor_left, 0);
       motors_set_speed(motor_right, 0);
       servo_set_angle(barrier_servo, BARRIER_UP_ANGLE);
-      if (command == 'X' && time == 0) {
+      if (command == 'C' && time == 0) {
         state = AUTONOMOUS;
         time = millis();
-      } else if (command == 'X' && time != 0) {
+      } else if (command == 'C' && time != 0) {
         state = RC;
       } else {
         state = IDLE;
@@ -483,34 +506,50 @@ void main_FSM() {
       static bool is_full_speed = false;
       static uint8_t angle = BARRIER_UP_ANGLE;
       uint8_t speed_divisor = is_full_speed ? 1 : 2; 
-      if (command == 'C') {
+      if (command == 'B') {
           is_full_speed = ~is_full_speed;
       }
-      if (command == 'S') {
+      if (command == 'D') {
         angle = angle != BARRIER_UP_ANGLE ? BARRIER_UP_ANGLE : BARRIER_DOWN_ANGLE;
         servo_set_angle(barrier_servo, angle);
       }
-      if (command == 'U') {
-          motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
-          motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
+      if (command == 'a') {
+        motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
+      }
+      if (command == 'k') {
+        motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_right, RC_TURNING_SPEED/speed_divisor);
+      }
+      if (command == 'l') {
+        motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_right, -RC_TURNING_SPEED/speed_divisor);
+      }
+      if (command == 'm') {
+        motors_set_speed(motor_left, -RC_TURNING_SPEED/speed_divisor);
+        motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
+      }
+      if (command == 'n') {
+        motors_set_speed(motor_left, RC_TURNING_SPEED/speed_divisor);
+        motors_set_speed(motor_right ,RC_FULL_SPEED/speed_divisor);
+      }  
+      if (command == 'c') {
+        motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
       } 
-      if (command == 'D') {
-          motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
-          motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
+      if (command == 'd') {
+        motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
       } 
-      if (command == 'L') {
-          motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
-          motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
-      } 
-      if (command == 'R') {
-          motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
-          motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
+      if (command == 'b') {
+        motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
       } 
       if (command == '0') {
-          motors_set_speed(motor_left, 0);
-          motors_set_speed(motor_right, 0);
+        motors_set_speed(motor_left, 0);
+        motors_set_speed(motor_right, 0);
       }
-      if (command == 'X') {
+      if (command == 'C') {
         state = IDLE;
       } else {
         state = RC;
@@ -518,7 +557,7 @@ void main_FSM() {
       break;
     }
     case AUTONOMOUS: {
-      if (command != 'X' && !force_rc_mode) {
+      if (command != 'C' && !force_rc_mode) {
         autonomous_mode_FSM();
         state = AUTONOMOUS;
       }
