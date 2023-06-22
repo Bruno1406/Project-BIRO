@@ -119,7 +119,7 @@ typedef enum {
 #define TEST_SERVO 4
 #define TEST_BLUETOOTH 5
 
-#define TEST TEST_DS
+#define TEST TEST_BLUETOOTH
 
 
 
@@ -334,29 +334,14 @@ bool TCR5000_is_on_line(line_sensors_t TCR5000_sensor) {
 }
 
 char bluetooth_get_command() {
-  static uint32_t debounce_timer = 0; 
-  static bool reset_timer = true;
-  static char current_command = '0';
-  char new_command = '0';
+  char command = '0';
   if (bt.available()) {
     command = bt.read();
   }
   if (Serial.available()) {
       bt.write(Serial.read());
   }
-  uint8_t debounce_max_time = new_command == 'C' || new_command == 'A' ? SAFETY_TIME : DEBOUNCE_TIME;
-  if (new_command == current_command) {
-    reset_timer = true;
-  } else {
-    if (reset_timer) {
-      debounce_timer = millis();
-      reset_timer = false;
-    }
-    if (millis() - debounce_timer > debounce_max_time) {
-      current_command = new_command;
-    }
-  } 
-  return current_command;
+  return command;
 }
 
 int16_t pid_algorithm(float error) {
