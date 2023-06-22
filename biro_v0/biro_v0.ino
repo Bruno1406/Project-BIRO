@@ -119,7 +119,7 @@ typedef enum {
 #define TEST_SERVO 4
 #define TEST_BLUETOOTH 5
 
-#define TEST TEST_BLUETOOTH
+#define TEST TEST_MAIN
 
 
 
@@ -147,6 +147,7 @@ static SoftwareSerial bt(RX,TX);
 
 static char command;
 static bool force_rc_mode = false;
+static main_state_t state = IDLE;
 
 /*****************************************
  * Functions Prototypes
@@ -245,7 +246,7 @@ void setup() {
 
 void loop() {
 #if TEST == MAIN
-  /Serial.println("BIRO");
+  //Serial.println("BIRO");
   main_FSM();   
 
 #elif TEST == TEST_LS
@@ -334,7 +335,7 @@ bool TCR5000_is_on_line(line_sensors_t TCR5000_sensor) {
 }
 
 char bluetooth_get_command() {
-  char command = '0';
+  static char command;
   if (bt.available()) {
     command = bt.read();
   }
@@ -365,7 +366,7 @@ void autonomous_mode_FSM() {
   }
   switch (state) {
     case WAIT_FOR_START: {
-      if (command == 'A') {
+      if (command == 'C') {
         state = FOLLOW_LINE;
         start_time = millis();
       } else {
@@ -469,18 +470,15 @@ void autonomous_mode_FSM() {
 }
 
 void main_FSM() {
-  static main_state_t state = IDLE;
-  static uint32_t time = 0;
   command = bluetooth_get_command();
   switch(state) {
     case IDLE: {
       motors_set_speed(motor_left, 0);
       motors_set_speed(motor_right, 0);
       servo_set_angle(barrier_servo, BARRIER_UP_ANGLE);
-      if (command == 'C' && time == 0) {
+      if (command == '1') {
         state = AUTONOMOUS;
-        time = millis();
-      } else if (command == 'C' && time != 0) {
+      } else if (command == '2') {
         state = RC;
       } else {
         state = IDLE;
@@ -534,21 +532,25 @@ void main_FSM() {
         motors_set_speed(motor_left, 0);
         motors_set_speed(motor_right, 0);
       }
-      if (command == 'C') {
+      if (command == '3') {
         state = IDLE;
+      } else if (command == '1') {
+        state = AUTONOMOUS;
       } else {
         state = RC;
       }
       break;
     }
     case AUTONOMOUS: {
-      if (command != 'C' && !force_rc_mode) {
-        autonomous_mode_FSM();
+      autonomous_mode_FSM();
+      if (command == '2' || force_rc_mode) {
+        state = RC;
+      } else if (command == '3') {
+        state = IDLE;
+      } else {
         state = AUTONOMOUS;
       }
-      else {
-        state = RC;
-      }
+  
       break;
     }
   }
