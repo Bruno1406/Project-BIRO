@@ -29,12 +29,18 @@ struct line_sensors_t {
       : reading_adc_pin(reading_adc_pin) {}
 };
 
+struct pid_struct_t {
+  float last_error = 0;
+  float integral = 0;
+  float derivative = 0;
+};
 typedef enum {
   WAIT_FOR_START,
   FOLLOW_LINE,
   FIRST_TURN,
   GRAB_OBJECTS,
-  CROSS_H
+  CROSS_H,
+  WAIT_FOR_RC
 } autonomous_state_t;
 
 typedef enum {
@@ -57,9 +63,10 @@ typedef enum {
 #define MAX_SPEED 100
 #define MIN_SPEED -100
 
-#define RC_FULL_SPEED 80
-#define RC_TURNING_SPEED 80
-#define FOLLOW_LINE_SPEED 30
+#define RC_FULL_SPEED 100
+#define RC_SLOW_SPEED 70
+#define RC_TURNING_SPEED 60
+#define FOLLOW_LINE_SPEED 60
 #define CROSS_H_TURNING_SPEED 70
 #define CROSS_H_STRAIGHT_SPEED 50
 #define FIRST_TURN_TURNING_SPEED 70
@@ -76,7 +83,7 @@ typedef enum {
 #define DS_LEFT_TRIGGER_PIN 3
 
 #define DS_RIGHT_ECHO_PIN 4
-#define DS_RIGHT_TRIGGER_PIN 5
+#define DS_RIGHT_TRIGGER_PIN 50
 
 #define DISTANCE_SENSORS_THRESHOLD 30
 
@@ -94,19 +101,19 @@ typedef enum {
 #define RX 11
 
 // PID CONSTANTS
-#define KP 0
+#define KP 30
 #define KD 0
 #define KI 0
 
 // TIME CONSTANTS MS
 #define AUTONOMOUS_MODE_TIME 60000
 #define GRAB_OBJECT_ROUTINE_START 10000
-#define GRAB_OBJECT_ROUTINE_END 120000
+#define GRAB_OBJECT_ROUTINE_END 10200
 #define CROSS_H_DECELERATION 100
-#define CROSS_H_TURNING CROSS_H_DECELERATION + 300
+#define CROSS_H_TURNING CROSS_H_DECELERATION + 500
 #define CROSS_H_STRAIGHT_LINE CROSS_H_TURNING + CROSS_H_DECELERATION + 2000
 #define FIRST_TURN_DECELERATION 100
-#define FIRST_TURN_STRAIGHT_LINE 200
+#define FIRST_TURN_STRAIGHT_LINE 300
 #define FIRST_TURN_TURNING FIRST_TURN_STRAIGHT_LINE + FIRST_TURN_DECELERATION + 1000
 #define DEBOUNCE_TIME 100
 #define SAFETY_TIME 1500
@@ -118,8 +125,9 @@ typedef enum {
 #define TEST_MOTORS 3
 #define TEST_SERVO 4
 #define TEST_BLUETOOTH 5
+#define TEST_FOLLOW_LINE 6
 
-#define TEST TEST_MAIN
+#define TEST TEST_FOLLOW_LINE
 
 
 
@@ -145,9 +153,18 @@ static int8_t ls_weight[NUM_OF_LS] = {-2,-1,1,2};
 static Servo barrier_servo;
 static SoftwareSerial bt(RX,TX);
 
+static pid_struct_t pid;
+
 static char command;
+static uint8_t angle = BARRIER_UP_ANGLE;
 static bool force_rc_mode = false;
+static bool is_full_speed = false;
+static bool objects_grabbed = false;
+static bool first_turn_beginning = true;
+static bool cross_h_beginning = true;
 static main_state_t state = IDLE;
+static autonomous_state_t auto_state = WAIT_FOR_START;
+
 
 /*****************************************
  * Functions Prototypes
@@ -208,7 +225,7 @@ char bluetooth_get_command();
  * 
  * @return How much the robot should be turning to get back on track
  */
-int16_t pid_algorithm(float error);
+int16_t pid_algorithm(pid_struct_t&  pid, float error);
 
 /**
  * @brief Autonomous mode Finite State Machine
@@ -291,9 +308,12 @@ void loop() {
 
 #elif TEST == TEST_BLUETOOTH
   char command = bluetooth_get_command();
-  if (command != '0') {
+  //if (command != '0') {
     Serial.println(command);
-  }
+  //}
+#elif TEST == TEST_FOLLOW_LINE 
+  auto_state = FOLLOW_LINE;
+  main_FSM();
 #endif 
 }
 
@@ -324,9 +344,9 @@ uint16_t hcsr04_get_distance(distance_sensors_t hcsr04_sensor) {
 }
 
 bool hcsr04_is_not_seeing_wall() {
-  static uint8_t num_of_readings = 0;
-  num_of_readings += (hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD || 
-                      hcsr04_get_distance(ds_right) > DISTANCE_SENSORS_THRESHOLD) ? 1 : -num_of_readings;
+  static uint8_t num_of_readings;
+  num_of_readings = (hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD || 
+                     hcsr04_get_distance(ds_right) > DISTANCE_SENSORS_THRESHOLD) ? (num_of_readings + 1) : 0;
   return num_of_readings > 5; 
 }
 
@@ -345,36 +365,31 @@ char bluetooth_get_command() {
   return command;
 }
 
-int16_t pid_algorithm(float error) {
-  static float last_error = 0;
-  static float integral = 0;
-  static float derivative = 0;
-  derivative = error - last_error;
-  integral += error;
-  last_error = error;
-  int16_t response = (int16_t) (KP*error + KD*derivative + KI*integral);
+int16_t pid_algorithm(pid_struct_t& pid, float error) {
+  pid.derivative = error - pid.last_error;
+  pid.integral += error;
+  pid.last_error = error;
+  int16_t response = (int16_t) (KP*error + KD*pid.derivative + KI*pid.integral);
   return response;
 }
 
 void autonomous_mode_FSM() {
-  static autonomous_state_t state = WAIT_FOR_START;
-  static uint32_t start_time = 0;
-  static bool objects_grabbed = false;
+  static uint32_t start_time;
   uint32_t time = millis() - start_time;
-  if (start_time != 0 && time > AUTONOMOUS_MODE_TIME) {
-    force_rc_mode = true;
-  }
-  switch (state) {
+  switch (auto_state) {
     case WAIT_FOR_START: {
       if (command == 'C') {
-        state = FOLLOW_LINE;
+        auto_state = FOLLOW_LINE;
         start_time = millis();
       } else {
-        state = WAIT_FOR_START;
+        auto_state = WAIT_FOR_START;
       }
       break;
     }
     case FOLLOW_LINE: {
+      if (time > AUTONOMOUS_MODE_TIME) {
+        force_rc_mode = true;
+      }
       uint8_t num_of_on_line_ls = 0;
       uint8_t error = 0;
       for (uint8_t i = 0; i < NUM_OF_LS; i++) {
@@ -386,27 +401,32 @@ void autonomous_mode_FSM() {
       if (num_of_on_line_ls != 0) {
         error /= num_of_on_line_ls;
       }
-      int16_t response = pid_algorithm(error);
+      int16_t response = pid_algorithm(pid, error);
       motors_set_speed(motor_left, FOLLOW_LINE_SPEED + response);
       motors_set_speed(motor_right, FOLLOW_LINE_SPEED - response);
       if (hcsr04_is_not_seeing_wall() && !objects_grabbed) {
-        state = FIRST_TURN;
-      } else if (hcsr04_is_not_seeing_wall()) {
-        state = CROSS_H;
-      } else if (time - start_time > GRAB_OBJECT_ROUTINE_START && time - start_time < GRAB_OBJECT_ROUTINE_END) {
-        state = GRAB_OBJECTS;
+        auto_state = FIRST_TURN;
       } else if (num_of_on_line_ls == 0 && hcsr04_is_not_seeing_wall()) {
         motors_set_speed(motor_left, 0);
         motors_set_speed(motor_right, 0);
-        state = WAIT_FOR_START;
+        auto_state = WAIT_FOR_RC;
+      } else if (hcsr04_is_not_seeing_wall()) {
+        auto_state = CROSS_H;
+      } else if (time - start_time > GRAB_OBJECT_ROUTINE_START && time - start_time < GRAB_OBJECT_ROUTINE_END) {
+        auto_state = GRAB_OBJECTS;
       } else {
-        state = FOLLOW_LINE;
+        auto_state = FOLLOW_LINE;
       }
       break;
     }
     case FIRST_TURN: {
-      static uint32_t first_turn_start_time = millis();
-      static int8_t direction = hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD ? -1 : 1;
+      static uint32_t first_turn_start_time;
+      static int8_t direction ;
+      if (first_turn_beginning) {
+        first_turn_start_time = millis();
+        direction = hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD ? -1 : 1;
+        first_turn_beginning = false;
+      }
       if (time - first_turn_start_time < FIRST_TURN_STRAIGHT_LINE) {
         motors_set_speed(motor_left, FIRST_TURN_STRAIGHT_SPEED);
         motors_set_speed(motor_right, FIRST_TURN_STRAIGHT_SPEED);
@@ -418,14 +438,19 @@ void autonomous_mode_FSM() {
         motors_set_speed(motor_right, -FIRST_TURN_TURNING_SPEED * direction);
       }
       if (time - first_turn_start_time >= FIRST_TURN_TURNING) {
-        state = FOLLOW_LINE;
+        auto_state = FOLLOW_LINE;
       } else {
-        state = FIRST_TURN;
+        auto_state = FIRST_TURN;
       }
     }
     case CROSS_H: {
-      static uint32_t cross_h_start_time = millis();
-      static int8_t direction = hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD ? -1 : 1;
+      static uint32_t cross_h_start_time;
+      static int8_t direction;
+      if (cross_h_beginning) {
+          cross_h_start_time = millis();
+          direction = hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD ? -1 : 1;
+          cross_h_beginning = false;
+      }
       if (time - cross_h_start_time < CROSS_H_DECELERATION) {
         motors_set_speed(motor_left, 0);
         motors_set_speed(motor_right, 0);
@@ -449,9 +474,9 @@ void autonomous_mode_FSM() {
         }
       }
       if (time - cross_h_start_time > CROSS_H_STRAIGHT_LINE && num_of_on_line_ls != 0) {
-        state = FOLLOW_LINE;
+        auto_state = FOLLOW_LINE;
       } else {
-        state = CROSS_H;
+        auto_state = CROSS_H;
       }
       break;  
     }
@@ -460,10 +485,17 @@ void autonomous_mode_FSM() {
       // TODO: GRAB MANEUVER
       if (time - start_time > GRAB_OBJECT_ROUTINE_END) {
         objects_grabbed = true;
-        state = FOLLOW_LINE;
+        auto_state = FOLLOW_LINE;
       } else {
-        state = GRAB_OBJECTS;
+        auto_state = GRAB_OBJECTS;
       }
+      break;
+    }
+    case WAIT_FOR_RC: {
+      if (time > AUTONOMOUS_MODE_TIME) {
+        force_rc_mode = true;
+      }
+      auto_state = WAIT_FOR_RC;
       break;
     }
   }
@@ -478,6 +510,7 @@ void main_FSM() {
       servo_set_angle(barrier_servo, BARRIER_UP_ANGLE);
       if (command == '1') {
         state = AUTONOMOUS;
+        auto_state = WAIT_FOR_START;
       } else if (command == '2') {
         state = RC;
       } else {
@@ -486,47 +519,45 @@ void main_FSM() {
       break;
     }
     case RC: {
-      static bool is_full_speed = false;
-      static uint8_t angle = BARRIER_UP_ANGLE;
-      uint8_t speed_divisor = is_full_speed ? 1 : 2; 
       if (command == 'B') {
-          is_full_speed = ~is_full_speed;
+          is_full_speed = (is_full_speed == false);
       }
+      uint8_t speed = is_full_speed ? RC_FULL_SPEED : RC_SLOW_SPEED; 
       if (command == 'D') {
         angle = angle != BARRIER_UP_ANGLE ? BARRIER_UP_ANGLE : BARRIER_DOWN_ANGLE;
         servo_set_angle(barrier_servo, angle);
       }
       if (command == 'a') {
-        motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
-        motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_left, speed);
+        motors_set_speed(motor_right, speed);
       }
       if (command == 'k') {
-        motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
-        motors_set_speed(motor_right, RC_TURNING_SPEED/speed_divisor);
+        motors_set_speed(motor_left, speed);
+        motors_set_speed(motor_right, speed/2);
       }
       if (command == 'l') {
-        motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
-        motors_set_speed(motor_right, -RC_TURNING_SPEED/speed_divisor);
+        motors_set_speed(motor_left, -speed);
+        motors_set_speed(motor_right, -speed/2);
       }
       if (command == 'm') {
-        motors_set_speed(motor_left, -RC_TURNING_SPEED/speed_divisor);
-        motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_left, -speed/2);
+        motors_set_speed(motor_right, -speed);
       }
       if (command == 'n') {
-        motors_set_speed(motor_left, RC_TURNING_SPEED/speed_divisor);
-        motors_set_speed(motor_right ,RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_left, speed/2);
+        motors_set_speed(motor_right ,speed);
       }  
       if (command == 'c') {
-        motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
-        motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_left, -speed);
+        motors_set_speed(motor_right, -speed);
       } 
       if (command == 'd') {
-        motors_set_speed(motor_left, -RC_FULL_SPEED/speed_divisor);
-        motors_set_speed(motor_right, RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_left, -speed);
+        motors_set_speed(motor_right, speed);
       } 
       if (command == 'b') {
-        motors_set_speed(motor_left, RC_FULL_SPEED/speed_divisor);
-        motors_set_speed(motor_right, -RC_FULL_SPEED/speed_divisor);
+        motors_set_speed(motor_left, speed);
+        motors_set_speed(motor_right, -speed);
       } 
       if (command == '0') {
         motors_set_speed(motor_left, 0);
@@ -536,6 +567,7 @@ void main_FSM() {
         state = IDLE;
       } else if (command == '1') {
         state = AUTONOMOUS;
+        auto_state = WAIT_FOR_START;
       } else {
         state = RC;
       }
