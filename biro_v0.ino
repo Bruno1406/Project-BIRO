@@ -245,7 +245,7 @@ void setup() {
 
 void loop() {
 #if TEST == MAIN
-  Serial.println("BIRO");
+  /Serial.println("BIRO");
   main_FSM();   
 
 #elif TEST == TEST_LS
