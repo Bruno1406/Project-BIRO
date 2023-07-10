@@ -119,7 +119,7 @@ typedef enum {
 #define RC_FULL_SPEED 100
 #define RC_SLOW_SPEED 70
 #define RC_TURNING_SPEED 0
-#define FOLLOW_LINE_SPEED 60
+#define FOLLOW_LINE_SPEED 50
 #define TURN_SPEED 100
 #define LEFT_FACTOR 0.7
 #define RIGHT_FACTOR 1
@@ -162,7 +162,7 @@ typedef enum {
 #define GRAB_OBJECT_ROUTINE_START 10000
 #define GRAB_OBJECT_ROUTINE_END 10200
 #define FORK_TIME 2000
-#define FIRST_TURN_TIME 1000
+#define FIRST_TURN_TIME 700
 
 // TESTS
 #define MAIN 0
@@ -205,7 +205,9 @@ static bool force_rc_mode = false;
 static bool is_full_speed = false;
 static bool objects_grabbed = false;
 static bool is_before_first_turn = true;
-static bool is_fork_beginning = true;
+static uint32_t first_turn_start_time;
+static direction_t fork_direction;
+static uint32_t start_time;
 static main_state_t state = IDLE;
 static autonomous_state_t auto_state = WAIT_FOR_START;
 
@@ -388,8 +390,6 @@ int16_t pid_algorithm(pid_struct_t& pid, float error) {
 }
 
 void autonomous_mode_FSM() {
-  static uint32_t start_time;
-  static direction_t fork_direction;
   uint32_t time = millis() - start_time;
   switch (auto_state) {
     case WAIT_FOR_START: {
@@ -405,20 +405,24 @@ void autonomous_mode_FSM() {
       if (time > AUTONOMOUS_MODE_TIME) {
         force_rc_mode = true;
       }
-      uint8_t num_of_off_line_ls = 0;
+      uint8_t num_of_oN_line_ls = 0;
       uint8_t error = 0;
       for (uint8_t i = 0; i < NUM_OF_LS; i++) {
-        if (!ls_array[i].TCR5000_is_on_line()) {
+        if (ls_array[i].TCR5000_is_on_line()) {
           error += ls_weight[i];
-          num_of_off_line_ls++;
+          num_of_oN_line_ls++;
         }
       }
-      if (num_of_off_line_ls != 0) {
-        error /= num_of_off_line_ls;
+      if (error < 0) {
+        motor_left.motors_set_speed(LEFT_FACTOR*FOLLOW_LINE_SPEED);
+        motor_right.motors_set_speed(-RIGHT_FACTOR*FOLLOW_LINE_SPEED);
+      } else if (error > 0) {
+        motor_left.motors_set_speed(-LEFT_FACTOR*FOLLOW_LINE_SPEED);
+        motor_right.motors_set_speed(RIGHT_FACTOR*FOLLOW_LINE_SPEED);
+      } else {
+        motor_left.motors_set_speed(LEFT_FACTOR*FOLLOW_LINE_SPEED);
+        motor_right.motors_set_speed(RIGHT_FACTOR*FOLLOW_LINE_SPEED);
       }
-      int16_t response = pid_algorithm(pid, error);
-      motor_left.motors_set_speed(LEFT_FACTOR * (FOLLOW_LINE_SPEED - response));
-      motor_right.motors_set_speed(RIGHT_FACTOR * (FOLLOW_LINE_SPEED + response));
       if (is_before_first_turn) {
         if(ds_left.hcsr04_is_not_seeing_wall()) {
           fork_direction = LEFT;
@@ -427,21 +431,12 @@ void autonomous_mode_FSM() {
           fork_direction = RIGHT;
           auto_state = FIRST_TURN;
         }
-      } else if (time - start_time > GRAB_OBJECT_ROUTINE_START && time - start_time < GRAB_OBJECT_ROUTINE_END) {
-        auto_state = GRAB_OBJECTS;
-      } else if (num_of_off_line_ls == 0) {
-        auto_state = FORK;
-      } else if (num_of_off_line_ls == NUM_OF_LS && !is_fork_beginning) {
-        motor_left.motors_set_speed(0);
-        motor_right.motors_set_speed(0);
-        auto_state = WAIT_FOR_RC;
       } else {
         auto_state = FOLLOW_LINE;
       }
       break;
     }
     case FIRST_TURN: {
-      static uint32_t first_turn_start_time;
       if (is_before_first_turn) {
         first_turn_start_time = millis();
         is_before_first_turn = false;
@@ -452,37 +447,6 @@ void autonomous_mode_FSM() {
       } else {
         auto_state = FOLLOW_LINE;
       }
-    }
-    case FORK: {
-      static uint32_t fork_start_time;
-      if (is_fork_beginning) {
-        fork_start_time = millis();
-        is_fork_beginning = false;
-      }
-      if (millis() - fork_start_time < FORK_TIME) {
-        motor_left.motors_set_speed(-LEFT_FACTOR * fork_direction * TURN_SPEED);
-        motor_right.motors_set_speed(RIGHT_FACTOR * fork_direction * TURN_SPEED);
-      } else {
-        auto_state = FOLLOW_LINE;
-      }
-    }
-    case GRAB_OBJECTS: {
-      servo_set_angle(barrier_servo, BARRIER_DOWN_ANGLE);
-      // TODO: GRAB MANEUVER
-      if (time - start_time > GRAB_OBJECT_ROUTINE_END) {
-        objects_grabbed = true;
-        auto_state = FOLLOW_LINE;
-      } else {
-        auto_state = GRAB_OBJECTS;
-      }
-      break;
-    }
-    case WAIT_FOR_RC: {
-      if (time > AUTONOMOUS_MODE_TIME) {
-        force_rc_mode = true;
-      }
-      auto_state = WAIT_FOR_RC;
-      break;
     }
   }
 }
