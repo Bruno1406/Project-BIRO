@@ -6,27 +6,75 @@
 //
 
 /*****************************************
- * Types Definitions
+ * Classes Prototypes and Types Definitions
  *****************************************/
 
-struct dc_motors_t {
-  uint8_t pwm_pin;
-  uint8_t direction_pin;
-  dc_motors_t(uint8_t pwm_pin, uint8_t direction_pin)
-      : pwm_pin(pwm_pin), direction_pin(direction_pin) {}
+class dc_motors_t {
+  public:
+    dc_motors_t(uint8_t pwm_pin, uint8_t direction_pin)
+        : pwm_pin(pwm_pin), direction_pin(direction_pin) {
+          SoftPWMSet(this->pwm_pin, 0);
+    }
+
+    /**
+     * @brief Sets motors speed
+     * 
+     * @param speed The desired speed for the motor
+     */
+    void motors_set_speed(int8_t speed);
+
+  private:
+    uint8_t pwm_pin;
+    uint8_t direction_pin;
+
 };
 
-struct distance_sensors_t {
-  uint8_t echo_pin;
-  uint8_t trigger_pin;
-  distance_sensors_t(uint8_t echo_pin, uint8_t trigger_pin)
-      : echo_pin(echo_pin), trigger_pin(trigger_pin) {}
+class distance_sensors_t {
+  public:
+    distance_sensors_t(uint8_t echo_pin, uint8_t trigger_pin)
+        : echo_pin(echo_pin), trigger_pin(trigger_pin) {}
+
+    /**
+     * @brief Gets distance reading from hc-sr04 ultrassonic distance sensors
+     * 
+     * @return The distance reading obtained from the sensor
+     */
+    uint16_t hcsr04_get_distance();
+  
+    /**
+     * @brief Gets if at least one distance sensor is seeing the wall
+     * 
+     * @return Whether or not one of the sensors is not seeing the wall
+     */
+    bool hcsr04_is_not_seeing_wall();
+
+  private:
+    uint16_t num_of_readings = 0;
+    uint8_t echo_pin;
+    uint8_t trigger_pin;
 };
 
-struct line_sensors_t {
-  uint8_t reading_adc_pin;
-  line_sensors_t(uint8_t reading_adc_pin)
-      : reading_adc_pin(reading_adc_pin) {}
+class line_sensors_t {
+  public:
+    line_sensors_t(uint8_t reading_adc_pin)
+        : reading_adc_pin(reading_adc_pin) {}
+
+    /**
+     * @brief Gets reading from TCRT5000 IR sensor
+     * 
+     * @return The raw ADC reading from TCRT5000 IR sensor
+     */
+    uint16_t TCR5000_get_raw_reading();
+
+    /**
+     * @brief Gets if TCRT5000 IR sensor is on line
+     * 
+     * @return Whether or not the sensor is on line
+     */
+    bool TCR5000_is_on_line();
+
+  private:
+      uint8_t reading_adc_pin;
 };
 
 struct pid_struct_t {
@@ -39,7 +87,7 @@ typedef enum {
   FOLLOW_LINE,
   FIRST_TURN,
   GRAB_OBJECTS,
-  CROSS_H,
+  FORK,
   WAIT_FOR_RC
 } autonomous_state_t;
 
@@ -49,28 +97,32 @@ typedef enum {
   RC,
 } main_state_t;
 
+typedef enum {
+  LEFT = 1,
+  RIGHT = -1
+} direction_t;
+
 /*****************************************
  * Constants
  *****************************************/
 
 // DC MOTORS
-#define MOTOR_LEFT_PWM_PIN 9
-#define MOTOR_LEFT_DIRECTION_PIN 10
+#define MOTOR_LEFT_PWM_PIN 7
+#define MOTOR_LEFT_DIRECTION_PIN 8
  
-#define MOTOR_RIGHT_PWM_PIN 7
-#define MOTOR_RIGHT_DIRECTION_PIN 8
+#define MOTOR_RIGHT_PWM_PIN 9
+#define MOTOR_RIGHT_DIRECTION_PIN 10
 
 #define MAX_SPEED 100
 #define MIN_SPEED -100
 
 #define RC_FULL_SPEED 100
 #define RC_SLOW_SPEED 70
-#define RC_TURNING_SPEED 60
+#define RC_TURNING_SPEED 0
 #define FOLLOW_LINE_SPEED 60
-#define CROSS_H_TURNING_SPEED 70
-#define CROSS_H_STRAIGHT_SPEED 50
-#define FIRST_TURN_TURNING_SPEED 70
-#define FIRST_TURN_STRAIGHT_SPEED 50
+#define TURN_SPEED 100
+#define LEFT_FACTOR 0.7
+#define RIGHT_FACTOR 1
 
 // SERVO MOTOR
 #define SERVO_PIN 6
@@ -83,7 +135,7 @@ typedef enum {
 #define DS_LEFT_TRIGGER_PIN 3
 
 #define DS_RIGHT_ECHO_PIN 4
-#define DS_RIGHT_TRIGGER_PIN 50
+#define DS_RIGHT_TRIGGER_PIN 5
 
 #define DISTANCE_SENSORS_THRESHOLD 30
 
@@ -101,7 +153,7 @@ typedef enum {
 #define RX 11
 
 // PID CONSTANTS
-#define KP 30
+#define KP 40 
 #define KD 0
 #define KI 0
 
@@ -109,14 +161,8 @@ typedef enum {
 #define AUTONOMOUS_MODE_TIME 60000
 #define GRAB_OBJECT_ROUTINE_START 10000
 #define GRAB_OBJECT_ROUTINE_END 10200
-#define CROSS_H_DECELERATION 100
-#define CROSS_H_TURNING CROSS_H_DECELERATION + 500
-#define CROSS_H_STRAIGHT_LINE CROSS_H_TURNING + CROSS_H_DECELERATION + 2000
-#define FIRST_TURN_DECELERATION 100
-#define FIRST_TURN_STRAIGHT_LINE 300
-#define FIRST_TURN_TURNING FIRST_TURN_STRAIGHT_LINE + FIRST_TURN_DECELERATION + 1000
-#define DEBOUNCE_TIME 100
-#define SAFETY_TIME 1500
+#define FORK_TIME 2000
+#define FIRST_TURN_TIME 1000
 
 // TESTS
 #define MAIN 0
@@ -127,9 +173,7 @@ typedef enum {
 #define TEST_BLUETOOTH 5
 #define TEST_FOLLOW_LINE 6
 
-#define TEST TEST_FOLLOW_LINE
-
-
+#define TEST MAIN
 
 /*****************************************
  * Variables
@@ -160,23 +204,14 @@ static uint8_t angle = BARRIER_UP_ANGLE;
 static bool force_rc_mode = false;
 static bool is_full_speed = false;
 static bool objects_grabbed = false;
-static bool first_turn_beginning = true;
-static bool cross_h_beginning = true;
+static bool is_before_first_turn = true;
+static bool is_fork_beginning = true;
 static main_state_t state = IDLE;
 static autonomous_state_t auto_state = WAIT_FOR_START;
-
 
 /*****************************************
  * Functions Prototypes
  *****************************************/
-
-/**
- * @brief Sets motors speed
- * 
- * @param motor Struct containing motor PWM pins
- * @param speed The desired speed for the motor
- */
-void motors_set_speed(dc_motors_t motor, int8_t speed);
 
 /**
  * @brief Sets servo angle
@@ -185,31 +220,6 @@ void motors_set_speed(dc_motors_t motor, int8_t speed);
  * @param angle The desired speed for the servo motor
  */
 void servo_set_angle(Servo servo, uint8_t angle);
-
-/**
- * @brief Gets distance reading from hc-sr04 ultrassonic distance sensors
- * 
- * @param hcsr04_sensor Struct containing distance sensor information
- * 
- * @return The distance reading obtained from the sensor
- */
-uint16_t hcsr04_get_distance(distance_sensors_t hcTCR5000sr04_sensor);
-
-/**
- * @brief Gets if at least one distance sensor is seeing the wall
- * 
- * @return Whether or not one of the sensors is not seeing the wall
- */
-bool hcsr04_is_not_seeing_wall();
-
-/**
- * @brief Gets reading from TCRT5000 IR sensor
- * 
- * @param TCRT5000_sensor Struct containing line sensor information
- * 
- * @return Whether or not the sensor is on line
- */
-bool TCR5000_is_on_line(line_sensors_t TCR5000_sensor);
 
 /**
  * @brief Gets command from bluetooth app
@@ -255,15 +265,13 @@ void setup() {
   pinMode(DS_LEFT_ECHO_PIN, INPUT);
   pinMode(DS_RIGHT_ECHO_PIN, INPUT);
   pinMode(SERVO_PIN, OUTPUT);
-  SoftPWMSet(motor_left.pwm_pin, 0);
-  SoftPWMSet(motor_right.pwm_pin, 0);
   barrier_servo.attach(SERVO_PIN);
   servo_set_angle(barrier_servo, BARRIER_UP_ANGLE);
 }
 
 void loop() {
 #if TEST == MAIN
-  //Serial.println("BIRO");
+  Serial.println(auto_state);
   main_FSM();   
 
 #elif TEST == TEST_LS
@@ -271,33 +279,33 @@ void loop() {
     Serial.print("Line Sensor ");
     Serial.print(i);
     Serial.println(":");
-    Serial.print(analogRead(ls_array[i].reading_adc_pin));
+    Serial.print(ls_array[i].TCR5000_get_raw_reading());
     Serial.print(" : ");
-    Serial.println(TCR5000_is_on_line(ls_array[i]));
+    Serial.println(ls_array[i].TCR5000_is_on_line());
   }
-  delay(1000);
+  
 
 #elif TEST == TEST_DS
   Serial.print("Distance Sensor Left: ");
-  Serial.println(hcsr04_get_distance(ds_left));
+  Serial.println(ds_left.hcsr04_get_distance());
+  Serial.println(ds_left.hcsr04_is_not_seeing_wall());
   Serial.print("Distance Sensor Right: ");
-  Serial.println(hcsr04_get_distance(ds_right));
-  Serial.print("Is seeing wall: ");
-  Serial.println(hcsr04_is_not_seeing_wall());
+  Serial.println(ds_right.hcsr04_get_distance());
+  Serial.println(ds_right.hcsr04_is_not_seeing_wall());
   delay(1000);
 
 #elif TEST == TEST_MOTORS
-  motors_set_speed(motor_left, MAX_SPEED);
-  motors_set_speed(motor_right, MAX_SPEED);
+  motor_left.motors_set_speed(MAX_SPEED);
+  motor_right.motors_set_speed(MAX_SPEED);
   delay(3000);
-  motors_set_speed(motor_left, MIN_SPEED);
-  motors_set_speed(motor_right, MIN_SPEED);
+  motor_left.motors_set_speed(MIN_SPEED);
+  motor_right.motors_set_speed(MIN_SPEED);
   delay(3000);
-  motors_set_speed(motor_left, MAX_SPEED);
-  motors_set_speed(motor_right, MIN_SPEED);
+  motor_left.motors_set_speed(MAX_SPEED);
+  motor_right.motors_set_speed(MIN_SPEED);
   delay(3000);
-  motors_set_speed(motor_left, MIN_SPEED);
-  motors_set_speed(motor_right, MAX_SPEED);
+  motor_left.motors_set_speed(MIN_SPEED);
+  motor_right.motors_set_speed(MAX_SPEED);
   delay(3000);
 
 #elif TEST == TEST_SERVO
@@ -308,9 +316,9 @@ void loop() {
 
 #elif TEST == TEST_BLUETOOTH
   char command = bluetooth_get_command();
-  //if (command != '0') {
+  if (command != '0') {
     Serial.println(command);
-  //}
+  }
 #elif TEST == TEST_FOLLOW_LINE 
   auto_state = FOLLOW_LINE;
   main_FSM();
@@ -318,40 +326,46 @@ void loop() {
 }
 
 /*****************************************
- * Functions Definitions
+ * Class Methods Definitions
  *****************************************/
 
-void motors_set_speed(dc_motors_t motor, int8_t speed) {
+void dc_motors_t::motors_set_speed(int8_t speed) {
   speed = constrain(speed, MIN_SPEED, MAX_SPEED);
   uint8_t duty_cycle = abs(speed);
-  speed >= 0 ? digitalWrite(motor.direction_pin, HIGH) : digitalWrite(motor.direction_pin, LOW);
-  SoftPWMSetPercent(motor.pwm_pin,duty_cycle);
+  speed >= 0 ? digitalWrite(this->direction_pin, HIGH) : digitalWrite(this->direction_pin, LOW);
+  SoftPWMSetPercent(this->pwm_pin,duty_cycle);
 }
+
+uint16_t distance_sensors_t::hcsr04_get_distance() {
+  digitalWrite(this->trigger_pin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(this->trigger_pin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(this->trigger_pin, LOW);
+  // Converts time in Microsseconds to centimeters
+  return (pulseIn(this->echo_pin, HIGH)/58);        
+}
+
+bool distance_sensors_t::hcsr04_is_not_seeing_wall() {
+  num_of_readings = (hcsr04_get_distance() > DISTANCE_SENSORS_THRESHOLD) ? (num_of_readings + 1) : 0;
+  return num_of_readings > 5; 
+}
+
+bool line_sensors_t::TCR5000_is_on_line() {
+  return (analogRead(this->reading_adc_pin) > LINE_SENSORS_THRESHOLD);
+}
+
+uint16_t line_sensors_t::TCR5000_get_raw_reading() {
+  return analogRead(this->reading_adc_pin);
+}
+
+/*****************************************
+ * Functions Definitions
+ *****************************************/
 
 void servo_set_angle(Servo servo, uint8_t angle) {
   angle = constrain(angle, 0, 180);
   servo.write(angle);
-}
-
-uint16_t hcsr04_get_distance(distance_sensors_t hcsr04_sensor) {
-  digitalWrite(hcsr04_sensor.trigger_pin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(hcsr04_sensor.trigger_pin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(hcsr04_sensor.trigger_pin, LOW);
-  // Converts time in Microsseconds to centimeters
-  return (pulseIn(hcsr04_sensor.echo_pin, HIGH)/58);        
-}
-
-bool hcsr04_is_not_seeing_wall() {
-  static uint8_t num_of_readings;
-  num_of_readings = (hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD || 
-                     hcsr04_get_distance(ds_right) > DISTANCE_SENSORS_THRESHOLD) ? (num_of_readings + 1) : 0;
-  return num_of_readings > 5; 
-}
-
-bool TCR5000_is_on_line(line_sensors_t TCR5000_sensor) {
-  return (analogRead(TCR5000_sensor.reading_adc_pin) > LINE_SENSORS_THRESHOLD);
 }
 
 char bluetooth_get_command() {
@@ -375,6 +389,7 @@ int16_t pid_algorithm(pid_struct_t& pid, float error) {
 
 void autonomous_mode_FSM() {
   static uint32_t start_time;
+  static direction_t fork_direction;
   uint32_t time = millis() - start_time;
   switch (auto_state) {
     case WAIT_FOR_START: {
@@ -390,30 +405,36 @@ void autonomous_mode_FSM() {
       if (time > AUTONOMOUS_MODE_TIME) {
         force_rc_mode = true;
       }
-      uint8_t num_of_on_line_ls = 0;
+      uint8_t num_of_off_line_ls = 0;
       uint8_t error = 0;
       for (uint8_t i = 0; i < NUM_OF_LS; i++) {
-        if (TCR5000_is_on_line(ls_array[i])) {
+        if (!ls_array[i].TCR5000_is_on_line()) {
           error += ls_weight[i];
-          num_of_on_line_ls++;
+          num_of_off_line_ls++;
         }
       }
-      if (num_of_on_line_ls != 0) {
-        error /= num_of_on_line_ls;
+      if (num_of_off_line_ls != 0) {
+        error /= num_of_off_line_ls;
       }
       int16_t response = pid_algorithm(pid, error);
-      motors_set_speed(motor_left, FOLLOW_LINE_SPEED + response);
-      motors_set_speed(motor_right, FOLLOW_LINE_SPEED - response);
-      if (hcsr04_is_not_seeing_wall() && !objects_grabbed) {
-        auto_state = FIRST_TURN;
-      } else if (num_of_on_line_ls == 0 && hcsr04_is_not_seeing_wall()) {
-        motors_set_speed(motor_left, 0);
-        motors_set_speed(motor_right, 0);
-        auto_state = WAIT_FOR_RC;
-      } else if (hcsr04_is_not_seeing_wall()) {
-        auto_state = CROSS_H;
+      motor_left.motors_set_speed(LEFT_FACTOR * (FOLLOW_LINE_SPEED - response));
+      motor_right.motors_set_speed(RIGHT_FACTOR * (FOLLOW_LINE_SPEED + response));
+      if (is_before_first_turn) {
+        if(ds_left.hcsr04_is_not_seeing_wall()) {
+          fork_direction = LEFT;
+          auto_state = FIRST_TURN;
+        } else if (ds_right.hcsr04_is_not_seeing_wall()) {
+          fork_direction = RIGHT;
+          auto_state = FIRST_TURN;
+        }
       } else if (time - start_time > GRAB_OBJECT_ROUTINE_START && time - start_time < GRAB_OBJECT_ROUTINE_END) {
         auto_state = GRAB_OBJECTS;
+      } else if (num_of_off_line_ls == 0) {
+        auto_state = FORK;
+      } else if (num_of_off_line_ls == NUM_OF_LS && !is_fork_beginning) {
+        motor_left.motors_set_speed(0);
+        motor_right.motors_set_speed(0);
+        auto_state = WAIT_FOR_RC;
       } else {
         auto_state = FOLLOW_LINE;
       }
@@ -421,64 +442,29 @@ void autonomous_mode_FSM() {
     }
     case FIRST_TURN: {
       static uint32_t first_turn_start_time;
-      static int8_t direction ;
-      if (first_turn_beginning) {
+      if (is_before_first_turn) {
         first_turn_start_time = millis();
-        direction = hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD ? -1 : 1;
-        first_turn_beginning = false;
+        is_before_first_turn = false;
       }
-      if (time - first_turn_start_time < FIRST_TURN_STRAIGHT_LINE) {
-        motors_set_speed(motor_left, FIRST_TURN_STRAIGHT_SPEED);
-        motors_set_speed(motor_right, FIRST_TURN_STRAIGHT_SPEED);
-      } else if (time - first_turn_start_time <= FIRST_TURN_STRAIGHT_LINE + FIRST_TURN_DECELERATION) {
-        motors_set_speed(motor_left, 0);
-        motors_set_speed(motor_right, 0);
-      } else if (time - first_turn_start_time < FIRST_TURN_TURNING) {
-        motors_set_speed(motor_left, FIRST_TURN_TURNING_SPEED * direction);
-        motors_set_speed(motor_right, -FIRST_TURN_TURNING_SPEED * direction);
-      }
-      if (time - first_turn_start_time >= FIRST_TURN_TURNING) {
-        auto_state = FOLLOW_LINE;
+      if (millis() - first_turn_start_time < FIRST_TURN_TIME) {
+        motor_left.motors_set_speed(-LEFT_FACTOR * fork_direction * TURN_SPEED);
+        motor_right.motors_set_speed(RIGHT_FACTOR * fork_direction * TURN_SPEED);
       } else {
-        auto_state = FIRST_TURN;
+        auto_state = FOLLOW_LINE;
       }
     }
-    case CROSS_H: {
-      static uint32_t cross_h_start_time;
-      static int8_t direction;
-      if (cross_h_beginning) {
-          cross_h_start_time = millis();
-          direction = hcsr04_get_distance(ds_left) > DISTANCE_SENSORS_THRESHOLD ? -1 : 1;
-          cross_h_beginning = false;
+    case FORK: {
+      static uint32_t fork_start_time;
+      if (is_fork_beginning) {
+        fork_start_time = millis();
+        is_fork_beginning = false;
       }
-      if (time - cross_h_start_time < CROSS_H_DECELERATION) {
-        motors_set_speed(motor_left, 0);
-        motors_set_speed(motor_right, 0);
-        break;
-      } else if (time - cross_h_start_time <= CROSS_H_TURNING) {
-        motors_set_speed(motor_left, CROSS_H_TURNING_SPEED * direction);
-        motors_set_speed(motor_right, -CROSS_H_TURNING_SPEED * direction);
-        break;
-      } else if (time - cross_h_start_time < CROSS_H_DECELERATION + CROSS_H_TURNING) {
-        motors_set_speed(motor_left, 0);
-        motors_set_speed(motor_right, 0);
-        break;
+      if (millis() - fork_start_time < FORK_TIME) {
+        motor_left.motors_set_speed(-LEFT_FACTOR * fork_direction * TURN_SPEED);
+        motor_right.motors_set_speed(RIGHT_FACTOR * fork_direction * TURN_SPEED);
       } else {
-        motors_set_speed(motor_left, CROSS_H_STRAIGHT_SPEED);
-        motors_set_speed(motor_right, CROSS_H_STRAIGHT_SPEED);
-      }
-      uint8_t num_of_on_line_ls = 0;
-      for (uint8_t i = 0; i < NUM_OF_LS; i++) {
-        if (TCR5000_is_on_line(ls_array[i])) {
-          num_of_on_line_ls++;
-        }
-      }
-      if (time - cross_h_start_time > CROSS_H_STRAIGHT_LINE && num_of_on_line_ls != 0) {
         auto_state = FOLLOW_LINE;
-      } else {
-        auto_state = CROSS_H;
       }
-      break;  
     }
     case GRAB_OBJECTS: {
       servo_set_angle(barrier_servo, BARRIER_DOWN_ANGLE);
@@ -505,8 +491,8 @@ void main_FSM() {
   command = bluetooth_get_command();
   switch(state) {
     case IDLE: {
-      motors_set_speed(motor_left, 0);
-      motors_set_speed(motor_right, 0);
+     motor_left.motors_set_speed(0);
+      motor_right.motors_set_speed(0);
       servo_set_angle(barrier_servo, BARRIER_UP_ANGLE);
       if (command == '1') {
         state = AUTONOMOUS;
@@ -520,7 +506,10 @@ void main_FSM() {
     }
     case RC: {
       if (command == 'B') {
-          is_full_speed = (is_full_speed == false);
+          is_full_speed = false;
+      }
+      if (command == 'A') {
+        is_full_speed = true;
       }
       uint8_t speed = is_full_speed ? RC_FULL_SPEED : RC_SLOW_SPEED; 
       if (command == 'D') {
@@ -528,40 +517,40 @@ void main_FSM() {
         servo_set_angle(barrier_servo, angle);
       }
       if (command == 'a') {
-        motors_set_speed(motor_left, speed);
-        motors_set_speed(motor_right, speed);
+        motor_left.motors_set_speed(LEFT_FACTOR * speed);
+        motor_right.motors_set_speed(RIGHT_FACTOR * speed);
       }
       if (command == 'k') {
-        motors_set_speed(motor_left, speed);
-        motors_set_speed(motor_right, speed/2);
+       motor_left.motors_set_speed(LEFT_FACTOR * speed);
+       motor_right.motors_set_speed(0);
       }
       if (command == 'l') {
-        motors_set_speed(motor_left, -speed);
-        motors_set_speed(motor_right, -speed/2);
+       motor_left.motors_set_speed(-LEFT_FACTOR * speed);
+       motor_right.motors_set_speed(0);
       }
       if (command == 'm') {
-        motors_set_speed(motor_left, -speed/2);
-        motors_set_speed(motor_right, -speed);
+       motor_left.motors_set_speed(0);
+       motor_right.motors_set_speed(-RIGHT_FACTOR * speed);
       }
       if (command == 'n') {
-        motors_set_speed(motor_left, speed/2);
-        motors_set_speed(motor_right ,speed);
+       motor_left.motors_set_speed(0);
+       motor_right.motors_set_speed(RIGHT_FACTOR * speed);
       }  
       if (command == 'c') {
-        motors_set_speed(motor_left, -speed);
-        motors_set_speed(motor_right, -speed);
+       motor_left.motors_set_speed(-LEFT_FACTOR * speed);
+       motor_right.motors_set_speed(-RIGHT_FACTOR * speed);
       } 
       if (command == 'd') {
-        motors_set_speed(motor_left, -speed);
-        motors_set_speed(motor_right, speed);
+       motor_left.motors_set_speed(-LEFT_FACTOR * speed);
+       motor_right.motors_set_speed(RIGHT_FACTOR * speed);
       } 
       if (command == 'b') {
-        motors_set_speed(motor_left, speed);
-        motors_set_speed(motor_right, -speed);
+       motor_left.motors_set_speed(LEFT_FACTOR * speed);
+       motor_right.motors_set_speed(-RIGHT_FACTOR * speed);
       } 
       if (command == '0') {
-        motors_set_speed(motor_left, 0);
-        motors_set_speed(motor_right, 0);
+       motor_left.motors_set_speed(0);
+       motor_right.motors_set_speed(0);
       }
       if (command == '3') {
         state = IDLE;
@@ -582,7 +571,6 @@ void main_FSM() {
       } else {
         state = AUTONOMOUS;
       }
-  
       break;
     }
   }
